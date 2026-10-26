@@ -1,0 +1,25 @@
+[project]
+name = "aegisdesk"
+version = "1.0.0"
+description = "API de atendimento com IA (FastAPI + Ollama) com pipeline DevSecOps, guardrails OWASP LLM 2026 e acervo de prompts"
+requires-python = ">=3.13"
+license = "MIT"
+authors = [
+  { name = "Letícia Saraiva" },
+  { name = "Nicolas Di Prospero" },
+  { name = "Matheus Caleiro" },
+  { name = "Kauã Soares" },
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = ["ignore::DeprecationWarning:starlette.*"]
+
+[tool.bandit]
+exclude_dirs = ["tests", ".venv"]
+# B104: bind em 0.0.0.0 é intencional DENTRO do container (isolado por rede do Docker)
+skips = ["B104"]
+
+[tool.coverage.run]
+source = ["app"]

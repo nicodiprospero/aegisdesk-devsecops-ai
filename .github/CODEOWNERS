@@ -1,0 +1,7 @@
+# Toda mudança nestes caminhos exige aprovação do time de segurança (ative "Require review from Code Owners" na branch protection)
+*                       @nicodiprospero
+/prompts/               @nicodiprospero
+/app/guardrails.py      @nicodiprospero
+/.github/workflows/     @nicodiprospero
+/Dockerfile             @nicodiprospero
+/docker-compose.yml     @nicodiprospero

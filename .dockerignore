@@ -1,0 +1,17 @@
+.git
+.github
+.venv
+.env
+.env.*
+!.env.example
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.coverage
+htmlcov
+tests
+docs
+redteam
+scripts
+*.sarif
+*.cdx.json

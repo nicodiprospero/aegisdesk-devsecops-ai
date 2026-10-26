@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+htmlcov/
+.env
+.env.*
+!.env.example
+*.sarif
+*.cdx.json
+redteam-results.json
+api.log

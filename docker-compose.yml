@@ -1,0 +1,66 @@
+# Deploy local / VPS. Primeira vez:
+#   cp .env.example .env   (preencha AEGIS_API_KEY_HASHES e AEGIS_CANARY_TOKEN)
+#   docker compose up -d --build
+#   docker compose --profile setup run --rm model-pull
+#   curl -s localhost:8000/readyz
+name: aegisdesk
+
+services:
+  api:
+    image: ${AEGIS_IMAGE:-aegisdesk:local}
+    build: .
+    env_file: .env
+    environment:
+      AEGIS_OLLAMA_URL: http://ollama:11434
+    ports:
+      - "127.0.0.1:8000:8000" # só localhost: exponha via reverse proxy com TLS (Caddy/Nginx/Traefik)
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid,nodev
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    mem_limit: 512m
+    cpus: 1.0
+    restart: unless-stopped
+    depends_on:
+      ollama:
+        condition: service_healthy
+    networks: [edge, llm]
+
+  ollama:
+    image: ollama/ollama:0.40.11 # versão fixa — nunca :latest
+    volumes:
+      - ollama-models:/root/.ollama
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 8g
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    networks: [llm] # sem "ports": o LLM não é acessível de fora
+
+  model-pull:
+    image: ollama/ollama:0.40.11
+    profiles: [setup]
+    environment:
+      OLLAMA_HOST: ollama:11434
+    entrypoint: ["ollama", "pull", "${AEGIS_OLLAMA_MODEL:-qwen2.5:3b}"]
+    depends_on:
+      ollama:
+        condition: service_healthy
+    networks: [llm]
+
+networks:
+  edge: {}
+  llm:
+    # Depois de baixar o modelo, mude para "internal: true" para cortar o acesso do Ollama à internet.
+    internal: false
+
+volumes:
+  ollama-models: {}

@@ -1,0 +1,283 @@
+# Pipeline DevSecOps do AegisDesk
+# Regra de ouro: TODA Action de terceiro fixada por SHA de commit (lição do caso Trivy / CVE-2026-33634).
+# Dependabot (.github/dependabot.yml) abre PR quando sair versão nova, já com o SHA atualizado.
+
+name: DevSecOps
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "23 9 * * 1" # toda segunda: detecta CVEs novos em dependências que não mudaram
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.13"
+  TRIVY_VERSION: "v0.70.0"
+
+jobs:
+  # ------------------------------------------------------------------ 1. Segredos
+  secrets:
+    name: 🔑 Secrets (Gitleaks)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # varre todo o histórico, não só o último commit
+          persist-credentials: false
+      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }} # só exigido em repositório de organização
+
+  # ------------------------------------------------------------------ 2. SAST
+  sast:
+    name: 🔍 SAST (Semgrep + Bandit)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      security-events: write # envia SARIF para a aba Security
+    steps:
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Instalar scanners (versões fixas)
+        run: pip install "semgrep==1.182.1" "bandit[sarif]==1.9.4"
+      - name: Semgrep (OWASP Top 10, Python, segredos)
+        run: |
+          semgrep scan --config p/python --config p/owasp-top-ten --config p/secrets \
+            --sarif --output semgrep.sarif --error --metrics off app/ scripts/
+      - name: Bandit
+        run: bandit -r app scripts -c pyproject.toml -f sarif -o bandit.sarif
+      - name: Publicar SARIF (Semgrep)
+        if: always()
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+      - name: Publicar SARIF (Bandit)
+        if: always()
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          sarif_file: bandit.sarif
+          category: bandit
+
+  # ------------------------------------------------------------------ 3. SCA
+  sca:
+    name: 📦 SCA (pip-audit + Trivy fs)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: pip-audit (base OSV/PyPI)
+        uses: pypa/gh-action-pip-audit@1220774d901786e6f652ae159f7b6bc8fea6d266 # v1.1.0
+        with:
+          inputs: requirements.txt
+          require-hashes: true
+      - name: Trivy filesystem (vuln + secret + misconfig)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,misconfig
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+          format: sarif
+          output: trivy-fs.sarif
+          skip-dirs: .venv
+      - name: Publicar SARIF (Trivy fs)
+        if: always()
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-fs
+
+  # ------------------------------------------------------------------ 4. IaC + CI/CD
+  iac:
+    name: 🏗️ IaC & CI/CD (Checkov + zizmor)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install "checkov==3.3.30" "zizmor==1.31.1"
+      - name: Checkov (Dockerfile + GitHub Actions)
+        run: checkov -d . --framework dockerfile github_actions --compact --quiet --skip-path .venv
+      - name: zizmor (auditoria de workflows)
+        run: zizmor --min-severity medium .github/workflows/
+
+  # ------------------------------------------------------------------ 5. Governança de prompts
+  prompt-governance:
+    name: 📚 Governança (prompts + Trojan Source)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Lint do acervo de prompts
+        run: python scripts/lint_prompts.py
+      - name: Caracteres invisíveis/bidirecionais em todo o repositório
+        run: python scripts/check_unicode.py
+
+  # ------------------------------------------------------------------ 6. Testes
+  tests:
+    name: 🧪 Testes (guardrails + API)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install --require-hashes -r requirements.txt -r requirements-dev.txt
+      - run: pytest -q --cov=app --cov-report=term --cov-fail-under=85
+
+  # ------------------------------------------------------------------ 7. Build → scan → DAST → SBOM → assinatura
+  build:
+    name: 🐳 Build, Trivy image, ZAP, SBOM, Cosign
+    needs: [secrets, sast, sca, iac, prompt-governance, tests]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write # push no GHCR (só em main)
+      id-token: write # OIDC para assinatura keyless do Cosign
+      security-events: write
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}
+    steps:
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build (local, para escanear antes de publicar)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          load: true
+          push: false
+          tags: aegisdesk:ci
+          provenance: false
+
+      - name: Trivy image (gate CRITICAL/HIGH com correção)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          image-ref: aegisdesk:ci
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+          format: sarif
+          output: trivy-image.sarif
+      - name: Publicar SARIF (Trivy image)
+        if: always()
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          sarif_file: trivy-image.sarif
+          category: trivy-image
+
+      - name: Subir container para DAST
+        run: |
+          docker run -d --name aegis -p 8000:8000 \
+            -e AEGIS_ENV=ci -e AEGIS_API_KEY_HASHES=0000 -e AEGIS_CANARY_TOKEN=CANARY-ci \
+            --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges:true \
+            aegisdesk:ci
+          for i in $(seq 1 20); do curl -fsS http://localhost:8000/healthz && break; sleep 1; done
+          test "$(docker inspect --format '{{.Config.User}}' aegisdesk:ci)" = "10001:10001"
+
+      - name: DAST — OWASP ZAP baseline
+        uses: zaproxy/action-baseline@de8ad967d3548d44ef623df22cf95c3b0baf8b25 # v0.15.0
+        with:
+          target: http://localhost:8000/docs
+          rules_file_name: .zap/rules.tsv
+          cmd_options: "-a -I"
+          fail_action: true
+          allow_issue_writing: false
+          artifact_name: zap-report
+
+      - name: SBOM (CycloneDX)
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: aegisdesk:ci
+          format: cyclonedx-json
+          output-file: sbom.cdx.json
+          artifact-name: sbom.cdx.json
+
+      # ---- Daqui para baixo só em push na main: publica, assina e anexa o SBOM
+      - name: Login GHCR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push
+        id: push
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ github.sha }}
+            ${{ env.IMAGE }}:latest
+          provenance: mode=max # atestado de proveniência SLSA gerado pelo BuildKit
+          sbom: true
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+      - name: Assinar imagem e anexar SBOM (keyless, OIDC)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          cosign sign --yes "${IMAGE}@${DIGEST}"
+          cosign attest --yes --type cyclonedx --predicate sbom.cdx.json "${IMAGE}@${DIGEST}"
+          echo "### Imagem publicada e assinada" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`${IMAGE}@${DIGEST}\`" >> "$GITHUB_STEP_SUMMARY"

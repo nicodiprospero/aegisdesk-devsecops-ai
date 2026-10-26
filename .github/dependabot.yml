@@ -1,0 +1,17 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions # mantém os SHAs das Actions atualizados
+    directory: /
+    schedule: { interval: weekly, day: monday }
+    groups:
+      actions: { patterns: ["*"] }
+  - package-ecosystem: pip
+    directory: /
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 5
+  - package-ecosystem: docker
+    directory: /
+    schedule: { interval: weekly, day: monday }
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule: { interval: weekly, day: monday }

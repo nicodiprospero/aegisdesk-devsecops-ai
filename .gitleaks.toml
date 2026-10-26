@@ -1,0 +1,17 @@
+title = "AegisDesk gitleaks config"
+
+[extend]
+useDefault = true
+
+# Valores fictícios usados de propósito nos testes e exemplos
+[allowlist]
+description = "Valores de teste conhecidos (não são segredos reais)"
+regexes = [
+  '''chave-de-teste-nao-usar-em-producao''',
+  '''CANARY-teste-[0-9a-f]+''',
+  '''CANARY-trocar-em-producao''',
+  '''CANARY-ci''',
+]
+paths = [
+  '''requirements(-dev)?\.txt''',
+]

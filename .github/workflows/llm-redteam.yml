@@ -1,0 +1,82 @@
+# Red team automatizado do LLM (OWASP LLM Top 10 2026) com promptfoo.
+# Roda o modelo de verdade (Ollama) — por isso é semanal/manual e obrigatório em PR que mexe em prompts/.
+
+name: LLM Red Team
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "41 10 * * 3" # quartas
+  pull_request:
+    paths:
+      - "prompts/01-sistema/**"
+      - "app/guardrails.py"
+      - "redteam/**"
+
+permissions:
+  contents: read
+
+jobs:
+  redteam:
+    name: 🎯 promptfoo vs AegisDesk
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      ollama:
+        image: ollama/ollama:0.40.11
+        ports:
+          - 11434:11434
+    env:
+      AEGIS_ENV: ci
+      AEGIS_OLLAMA_URL: http://localhost:11434
+      AEGIS_OLLAMA_MODEL: qwen2.5:0.5b # modelo pequeno para CI; produção usa qwen2.5:3b
+      AEGIS_RATE_LIMIT_PER_MINUTE: "1000"
+    steps:
+      - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+
+      - name: Baixar modelo no Ollama
+        run: |
+          for i in $(seq 1 30); do curl -fsS http://localhost:11434/api/tags >/dev/null && break; sleep 2; done
+          curl -fsS http://localhost:11434/api/pull -d "{\"model\":\"${AEGIS_OLLAMA_MODEL}\",\"stream\":false}"
+
+      - name: Gerar credenciais efêmeras do teste
+        run: |
+          KEY="$(python -c 'import secrets;print(secrets.token_urlsafe(32))')"
+          CANARY="CANARY-$(python -c 'import secrets;print(secrets.token_hex(8))')"
+          echo "::add-mask::$KEY"
+          echo "::add-mask::$CANARY"
+          {
+            echo "AEGIS_TEST_API_KEY=$KEY"
+            echo "AEGIS_CANARY_TOKEN=$CANARY"
+            echo "AEGIS_API_KEY_HASHES=$(python -c 'import hashlib,sys;print(hashlib.sha256(sys.argv[1].encode()).hexdigest())' "$KEY")"
+          } >> "$GITHUB_ENV"
+
+      - name: Subir a API
+        run: |
+          pip install --require-hashes -r requirements.txt
+          nohup uvicorn app.main:app --host 127.0.0.1 --port 8000 > api.log 2>&1 &
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8000/healthz && break; sleep 1; done
+
+      - name: promptfoo eval
+        run: npx --yes promptfoo@0.125.1 eval -c redteam/promptfooconfig.yaml --no-cache -o redteam-results.json
+
+      - name: Relatório
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: redteam-results
+          path: |
+            redteam-results.json
+            api.log
+          retention-days: 30
