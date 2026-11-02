@@ -1,2 +1,2 @@
-pytest>=9.1,<10
+pytest>=9.2.0,<10
 pytest-cov>=7,<8
