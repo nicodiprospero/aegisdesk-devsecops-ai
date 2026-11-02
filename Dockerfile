@@ -6,7 +6,7 @@
 # Para build reprodutível, fixe por digest:  make pin-base
 
 # ---------------------------------------------------------------- build
-FROM python:3.13-slim-trixie AS builder
+FROM python:3.15-slim-trixie AS builder
 ENV PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PYTHONDONTWRITEBYTECODE=1
@@ -18,7 +18,7 @@ RUN python -m venv /opt/venv \
  && /opt/venv/bin/pip uninstall -y pip
 
 # ---------------------------------------------------------------- runtime
-FROM python:3.13-slim-trixie AS runtime
+FROM python:3.15-slim-trixie AS runtime
 LABEL org.opencontainers.image.title="AegisDesk API" \
       org.opencontainers.image.description="API de atendimento com IA e pipeline DevSecOps" \
       org.opencontainers.image.licenses="MIT"
