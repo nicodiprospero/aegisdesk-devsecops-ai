@@ -30,7 +30,7 @@ services:
     networks: [edge, llm]
 
   ollama:
-    image: ollama/ollama:0.40.11 # versão fixa — nunca :latest
+    image: ollama/ollama:0.40.13 # versão fixa — nunca :latest
     volumes:
       - ollama-models:/root/.ollama
     security_opt:
@@ -46,7 +46,7 @@ services:
     networks: [llm] # sem "ports": o LLM não é acessível de fora
 
   model-pull:
-    image: ollama/ollama:0.40.11
+    image: ollama/ollama:0.40.13
     profiles: [setup]
     environment:
       OLLAMA_HOST: ollama:11434
